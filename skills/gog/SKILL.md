@@ -1,6 +1,29 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: |
+  Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+
+  USE WHEN:
+  - Reading/searching Gmail (threads or individual messages)
+  - Sending emails, creating drafts, or replying to messages
+  - Querying or creating calendar events
+  - Searching Drive files
+  - Reading/writing Google Sheets
+  - Exporting Google Docs content
+
+  DO NOT USE WHEN:
+  - User asks about "email" but means a non-Gmail provider (check context)
+  - Need real-time notifications (gog is pull-only, use Gmail webhook for push)
+
+  OUTPUTS:
+  - JSON output (via --json flag) for structured data
+  - Plain text for simple queries
+  - Always confirm before sending emails or creating calendar events
+
+  EDGE CASES:
+  - Gmail search returns threads by default; use `messages search` for per-email results
+  - Multi-line email bodies require --body-file (not --body with \n)
+  - Calendar color IDs are 1-11, not color names
 homepage: https://gogcli.sh
 metadata:
   {

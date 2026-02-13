@@ -1,6 +1,31 @@
 ---
 name: spotify-player
-description: Terminal Spotify playback/search via spogo (preferred) or spotify_player.
+description: |
+  Control Spotify playback and search via terminal (spogo preferred, spotify_player fallback).
+
+  USE WHEN:
+  - Playing/pausing/skipping Spotify tracks
+  - Searching for songs, albums, artists, or playlists
+  - Switching playback devices
+  - Checking current playback status
+
+  DO NOT USE WHEN:
+  - User wants YouTube, Apple Music, or other streaming services
+  - User asks for "music" but means local files (use mpv or file player)
+  - User doesn't have Spotify Premium (Connect API requires Premium)
+  - Looking for music metadata/lyrics (use web search instead)
+
+  OUTPUTS:
+  - Search results with track/artist/album info
+  - Current playback status (track name, artist, playing/paused)
+  - Device list with active device highlighted
+  - Success/failure for playback commands
+
+  EDGE CASES:
+  - spogo requires cookie import from browser (`spogo auth import --browser chrome`)
+  - spotify_player TUI must be running for some operations
+  - Device names can be ambiguous — list devices first if unsure
+  - Search returns multiple result types (tracks, albums, artists) — clarify if needed
 homepage: https://www.spotify.com
 metadata:
   {
