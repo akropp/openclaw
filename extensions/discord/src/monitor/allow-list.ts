@@ -22,6 +22,8 @@ const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 type DiscordChannelOverrideConfig = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   skills?: string[];
   enabled?: boolean;
   users?: string[];
@@ -37,6 +39,8 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
