@@ -25,18 +25,11 @@ import {
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
-  SecretRefSchema,
-  SecretInputSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
   TtsConfigSchema,
-  requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
-import {
-  validateSlackSigningSecretRequirements,
-  validateTelegramWebhookSecretRequirements,
-} from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -71,20 +64,19 @@ const SlackCapabilitiesSchema = z.union([
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
-    agentId: z.string().optional(),
   })
   .strict();
 
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    disableAudioPreflight: z.boolean().optional(),
+    fanOut: z.boolean().optional(),
+    fanOutMaxRounds: z.number().int().positive().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
@@ -93,20 +85,6 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
-  })
-  .strict();
-
-export const TelegramDirectSchema = z
-  .object({
-    dmPolicy: DmPolicySchema.optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    systemPrompt: z.string().optional(),
-    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
-    requireTopic: z.boolean().optional(),
   })
   .strict();
 
@@ -178,7 +156,7 @@ export const TelegramAccountSchemaBase = z
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    botToken: SecretInputSchema.optional().register(sensitive),
+    botToken: z.string().optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
@@ -189,7 +167,6 @@ export const TelegramAccountSchemaBase = z
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
@@ -279,16 +256,19 @@ export const TelegramAccountSchemaBase = z
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
-  // Account-level schemas skip allowFrom validation because accounts inherit
-  // allowFrom from the parent channel config at runtime (resolveTelegramAccount
-  // shallow-merges top-level and account values in src/telegram/accounts.ts).
-  // Validation is enforced at the top-level TelegramConfigSchema instead.
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
+  });
   validateTelegramCustomCommands(value, ctx);
 });
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
@@ -299,44 +279,19 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     message:
       'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
   });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.telegram.dmPolicy="allowlist" requires channels.telegram.allowFrom to contain at least one sender ID',
-  });
   validateTelegramCustomCommands(value, ctx);
 
-  if (value.accounts) {
-    for (const [accountId, account] of Object.entries(value.accounts)) {
-      if (!account) {
-        continue;
-      }
-      const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-      const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-      requireOpenAllowFrom({
-        policy: effectivePolicy,
-        allowFrom: effectiveAllowFrom,
-        ctx,
-        path: ["accounts", accountId, "allowFrom"],
-        message:
-          'channels.telegram.accounts.*.dmPolicy="open" requires channels.telegram.accounts.*.allowFrom (or channels.telegram.allowFrom) to include "*"',
-      });
-      requireAllowlistAllowFrom({
-        policy: effectivePolicy,
-        allowFrom: effectiveAllowFrom,
-        ctx,
-        path: ["accounts", accountId, "allowFrom"],
-        message:
-          'channels.telegram.accounts.*.dmPolicy="allowlist" requires channels.telegram.accounts.*.allowFrom (or channels.telegram.allowFrom) to contain at least one sender ID',
-      });
-    }
+  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookSecret =
+    typeof value.webhookSecret === "string" ? value.webhookSecret.trim() : "";
+  if (baseWebhookUrl && !baseWebhookSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "channels.telegram.webhookUrl requires channels.telegram.webhookSecret",
+      path: ["webhookSecret"],
+    });
   }
-
   if (!value.accounts) {
-    validateTelegramWebhookSecretRequirements(value, ctx);
     return;
   }
   for (const [accountId, account] of Object.entries(value.accounts)) {
@@ -346,28 +301,22 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     if (account.enabled === false) {
       continue;
     }
-    const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = Array.isArray(account.allowFrom)
-      ? account.allowFrom
-      : value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.telegram.accounts.*.dmPolicy="open" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.telegram.accounts.*.dmPolicy="allowlist" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to contain at least one sender ID',
-    });
+    const accountWebhookUrl =
+      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    if (!accountWebhookUrl) {
+      continue;
+    }
+    const accountSecret =
+      typeof account.webhookSecret === "string" ? account.webhookSecret.trim() : "";
+    if (!accountSecret && !baseWebhookSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.telegram.accounts.*.webhookUrl requires channels.telegram.webhookSecret or channels.telegram.accounts.*.webhookSecret",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
   }
-  validateTelegramWebhookSecretRequirements(value, ctx);
 });
 
 export const DiscordDmSchema = z
@@ -384,7 +333,8 @@ export const DiscordGuildChannelSchema = z
   .object({
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
-    ignoreOtherMentions: z.boolean().optional(),
+    fanOut: z.boolean().optional(),
+    fanOutMaxRounds: z.number().int().positive().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -411,7 +361,8 @@ export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
-    ignoreOtherMentions: z.boolean().optional(),
+    fanOut: z.boolean().optional(),
+    fanOutMaxRounds: z.number().int().positive().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
@@ -459,9 +410,9 @@ export const DiscordAccountSchema = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    token: SecretInputSchema.optional().register(sensitive),
+    token: z.string().optional().register(sensitive),
     proxy: z.string().optional(),
-    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    allowBots: z.boolean().optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -538,10 +489,8 @@ export const DiscordAccountSchema = z
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
+        ttlHours: z.number().nonnegative().optional(),
         spawnSubagentSessions: z.boolean().optional(),
-        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -556,46 +505,18 @@ export const DiscordAccountSchema = z
     pluralkit: z
       .object({
         enabled: z.boolean().optional(),
-        token: SecretInputSchema.optional().register(sensitive),
+        token: z.string().optional().register(sensitive),
       })
       .strict()
       .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
-    ackReactionScope: z
-      .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
-      .optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
-    autoPresence: z
-      .object({
-        enabled: z.boolean().optional(),
-        intervalMs: z.number().int().positive().optional(),
-        minUpdateIntervalMs: z.number().int().positive().optional(),
-        healthyText: z.string().optional(),
-        degradedText: z.string().optional(),
-        exhaustedText: z.string().optional(),
-      })
-      .strict()
-      .optional(),
     activityType: z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
-    inboundWorker: z
-      .object({
-        runTimeoutMs: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
-    eventQueue: z
-      .object({
-        listenerTimeout: z.number().int().positive().optional(),
-        maxQueueSize: z.number().int().positive().optional(),
-        maxConcurrency: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -631,78 +552,22 @@ export const DiscordAccountSchema = z
       });
     }
 
-    const autoPresenceInterval = value.autoPresence?.intervalMs;
-    const autoPresenceMinUpdate = value.autoPresence?.minUpdateIntervalMs;
-    if (
-      typeof autoPresenceInterval === "number" &&
-      typeof autoPresenceMinUpdate === "number" &&
-      autoPresenceMinUpdate > autoPresenceInterval
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "channels.discord.autoPresence.minUpdateIntervalMs must be less than or equal to channels.discord.autoPresence.intervalMs",
-        path: ["autoPresence", "minUpdateIntervalMs"],
-      });
-    }
-
-    // DM allowlist validation is enforced at DiscordConfigSchema so account entries
-    // can inherit top-level allowFrom via runtime shallow merge.
+    const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
+    const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
+    const allowFromPath =
+      value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    requireOpenAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.discord.dmPolicy="open" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to include "*"',
+    });
   });
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
-  const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
-  const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.discord.dmPolicy="open" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
-    const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="open" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="allowlist" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to contain at least one sender ID',
-    });
-  }
 });
 
 export const GoogleChatDmSchema = z
@@ -720,14 +585,6 @@ export const GoogleChatDmSchema = z
       path: ["allowFrom"],
       message:
         'channels.googlechat.dm.policy="open" requires channels.googlechat.dm.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: value.policy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.googlechat.dm.policy="allowlist" requires channels.googlechat.dm.allowFrom to contain at least one sender ID',
     });
   });
 
@@ -754,11 +611,7 @@ export const GoogleChatAccountSchema = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), GoogleChatGroupSchema.optional()).optional(),
     defaultTo: z.string().optional(),
-    serviceAccount: z
-      .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
-      .optional()
-      .register(sensitive),
-    serviceAccountRef: SecretRefSchema.optional().register(sensitive),
+    serviceAccount: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),
@@ -837,16 +690,16 @@ export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
-    signingSecret: SecretInputSchema.optional().register(sensitive),
+    signingSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    botToken: SecretInputSchema.optional().register(sensitive),
-    appToken: SecretInputSchema.optional().register(sensitive),
-    userToken: SecretInputSchema.optional().register(sensitive),
+    botToken: z.string().optional().register(sensitive),
+    appToken: z.string().optional().register(sensitive),
+    userToken: z.string().optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.boolean().optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
@@ -900,48 +753,41 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
-    typingReaction: z.string().optional(),
   })
   .strict()
-  .superRefine((value) => {
+  .superRefine((value, ctx) => {
     normalizeSlackStreamingConfig(value);
 
-    // DM allowlist validation is enforced at SlackConfigSchema so account entries
-    // can inherit top-level allowFrom via runtime shallow merge.
+    const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
+    const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
+    const allowFromPath =
+      value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    requireOpenAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.slack.dmPolicy="open" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to include "*"',
+    });
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http"]).optional().default("socket"),
-  signingSecret: SecretInputSchema.optional().register(sensitive),
+  signingSecret: z.string().optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
-  const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
-  const allowFromPath =
-    value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.slack.dmPolicy="open" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: [...allowFromPath],
-    message:
-      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to contain at least one sender ID',
-  });
-
   const baseMode = value.mode ?? "socket";
+  if (baseMode === "http" && !value.signingSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
+      path: ["signingSecret"],
+    });
+  }
   if (!value.accounts) {
-    validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
   for (const [accountId, account] of Object.entries(value.accounts)) {
@@ -952,31 +798,19 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       continue;
     }
     const accountMode = account.mode ?? baseMode;
-    const effectivePolicy =
-      account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
-    const effectiveAllowFrom =
-      account.allowFrom ?? account.dm?.allowFrom ?? value.allowFrom ?? value.dm?.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="open" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
-    });
     if (accountMode !== "http") {
       continue;
     }
+    const accountSecret = account.signingSecret ?? value.signingSecret;
+    if (!accountSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
+        path: ["accounts", accountId, "signingSecret"],
+      });
+    }
   }
-  validateSlackSigningSecretRequirements(value, ctx);
 });
 
 const SignalGroupEntrySchema = z
@@ -1036,14 +870,18 @@ export const SignalAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level SignalConfigSchema instead.
-export const SignalAccountSchema = SignalAccountSchemaBase;
+export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+  });
+});
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
@@ -1052,41 +890,6 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     path: ["allowFrom"],
     message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
   });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="open" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
-    });
-  }
 });
 
 export const IrcGroupSchema = z
@@ -1105,7 +908,7 @@ export const IrcNickServSchema = z
   .object({
     enabled: z.boolean().optional(),
     service: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
+    password: z.string().optional().register(sensitive),
     passwordFile: z.string().optional(),
     register: z.boolean().optional(),
     registerEmail: z.string().optional(),
@@ -1125,7 +928,7 @@ export const IrcAccountSchemaBase = z
     nick: z.string().optional(),
     username: z.string().optional(),
     realname: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
+    password: z.string().optional().register(sensitive),
     passwordFile: z.string().optional(),
     nickserv: IrcNickServSchema.optional(),
     channels: z.array(z.string()).optional(),
@@ -1159,14 +962,6 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
     path: ["allowFrom"],
     message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.irc.dmPolicy="allowlist" requires channels.irc.allowFrom to contain at least one sender ID',
-  });
   if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -1176,51 +971,14 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
   }
 }
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level IrcConfigSchema instead.
 export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  // Only validate nickserv at account level, not allowFrom (inherited from parent).
-  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
-    });
-  }
+  refineIrcAllowFromAndNickserv(value, ctx);
 });
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   refineIrcAllowFromAndNickserv(value, ctx);
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.irc.accounts.*.dmPolicy="open" requires channels.irc.accounts.*.allowFrom (or channels.irc.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.irc.accounts.*.dmPolicy="allowlist" requires channels.irc.accounts.*.allowFrom (or channels.irc.allowFrom) to contain at least one sender ID',
-    });
-  }
 });
 
 export const IMessageAccountSchemaBase = z
@@ -1276,14 +1034,19 @@ export const IMessageAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level IMessageConfigSchema instead.
-export const IMessageAccountSchema = IMessageAccountSchemaBase;
+export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
+  });
+});
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
@@ -1293,41 +1056,6 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
     message:
       'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
   });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.imessage.dmPolicy="allowlist" requires channels.imessage.allowFrom to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.imessage.accounts.*.dmPolicy="open" requires channels.imessage.accounts.*.allowFrom (or channels.imessage.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.imessage.accounts.*.dmPolicy="allowlist" requires channels.imessage.accounts.*.allowFrom (or channels.imessage.allowFrom) to contain at least one sender ID',
-    });
-  }
 });
 
 const BlueBubblesAllowFromEntry = z.union([z.string(), z.number()]);
@@ -1365,7 +1093,7 @@ export const BlueBubblesAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     serverUrl: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
+    password: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
@@ -1387,14 +1115,18 @@ export const BlueBubblesAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level BlueBubblesConfigSchema instead.
-export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase;
+export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.bluebubbles.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
+  });
+});
 
 export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
   accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
   actions: BlueBubblesActionSchema,
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -1405,41 +1137,6 @@ export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
     message:
       'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
   });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.bluebubbles.accounts.*.dmPolicy="open" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to contain at least one sender ID',
-    });
-  }
 });
 
 export const MSTeamsChannelSchema = z
@@ -1469,7 +1166,7 @@ export const MSTeamsConfigSchema = z
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     appId: z.string().optional(),
-    appPassword: SecretInputSchema.optional().register(sensitive),
+    appPassword: z.string().optional().register(sensitive),
     tenantId: z.string().optional(),
     webhook: z
       .object({
@@ -1510,13 +1207,5 @@ export const MSTeamsConfigSchema = z
       path: ["allowFrom"],
       message:
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
     });
   });
