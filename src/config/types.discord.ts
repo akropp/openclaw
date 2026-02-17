@@ -31,6 +31,9 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** When true, fan out messages from other agents to all agent sessions for this channel. */
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -53,6 +56,9 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** When true, fan out messages from other agents to all agent sessions for channels in this guild. */
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

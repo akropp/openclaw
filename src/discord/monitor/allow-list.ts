@@ -20,6 +20,8 @@ export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
@@ -28,6 +30,8 @@ export type DiscordGuildEntryResolved = {
     {
       allow?: boolean;
       requireMention?: boolean;
+      fanOut?: boolean;
+      fanOutMaxRounds?: number;
       skills?: string[];
       enabled?: boolean;
       users?: string[];
@@ -42,6 +46,8 @@ export type DiscordGuildEntryResolved = {
 export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   skills?: string[];
   enabled?: boolean;
   users?: string[];
@@ -361,6 +367,8 @@ function resolveDiscordChannelConfigEntry(
   const resolved: DiscordChannelConfigResolved = {
     allowed: entry.allow !== false,
     requireMention: entry.requireMention,
+    fanOut: entry.fanOut,
+    fanOutMaxRounds: entry.fanOutMaxRounds,
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,

@@ -57,6 +57,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+  const fanOutDeliveredTexts: string[] = [];
   const {
     cfg,
     discordConfig,
@@ -130,6 +131,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
+  const channelFanOut = channelConfig?.fanOut ?? guildInfo?.fanOut ?? false;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
@@ -556,6 +558,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload, info) => {
+      if (payload.text) {
+        fanOutDeliveredTexts.push(payload.text);
+      }
       const isFinal = info.kind === "final";
       if (info.kind === "block") {
         // Block payloads carry reasoning/thinking content that should not be
@@ -754,5 +759,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       historyKey: messageChannelId,
       limit: historyLimit,
     });
+
+  // Notify fan-out coordinator of response
+  if (channelFanOut) {
+    const { notifyFanOutResponse } = await import("./fanout-coordinator.js");
+    const responseText =
+      fanOutDeliveredTexts.length > 0 ? fanOutDeliveredTexts.join("\n") : undefined;
+    await notifyFanOutResponse({
+      accountId,
+      channelId: messageChannelId,
+      triggerMessageId: message.id,
+      responseText,
+    });
+  }
   }
 }
