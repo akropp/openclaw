@@ -86,7 +86,10 @@ export function createDiscordMessageHandler(
         if (await tryFanOutRoute(ctx, params)) {
           return;
         }
-        await processDiscordMessage(ctx);
+        // Fire-and-forget: don't block the event listener (WebSocket heartbeat)
+        void processDiscordMessage(ctx).catch((err) => {
+          params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+        });
         return;
       }
       const combinedBaseText = entries
@@ -133,7 +136,10 @@ export function createDiscordMessageHandler(
       if (await tryFanOutRoute(ctx, params)) {
         return;
       }
-      await processDiscordMessage(ctx);
+      // Fire-and-forget: don't block the event listener (WebSocket heartbeat)
+      void processDiscordMessage(ctx).catch((err) => {
+        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+      });
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
