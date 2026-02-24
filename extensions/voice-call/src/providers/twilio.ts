@@ -625,12 +625,6 @@ export class TwilioProvider implements VoiceCallProvider {
           break;
         }
         handler.sendAudio(streamSid, chunk);
-
-        // Pace the audio to match real-time playback
-        await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
-        if (signal.aborted) {
-          break;
-        }
       }
 
       if (!signal.aborted) {

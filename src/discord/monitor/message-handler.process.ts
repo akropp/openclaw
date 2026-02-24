@@ -37,6 +37,7 @@ import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
+import { FANOUT_GUIDANCE, getFanOutRoundInfo } from "./fanout-coordinator.js";
 import { resolveTimestampMs } from "./format.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import {
@@ -247,6 +248,26 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
 
+  // Wrap fan-out bot messages with guidance text to enable cross-agent conversation
+  // while preventing infinite reply loops via the NO_REPLY directive.
+  if (ctx.isFanOutBotMessage) {
+    const agentDisplayName = author.globalName ?? author.username ?? sender.name ?? "Agent";
+    const channelLabel = displayChannelSlug ? `#${displayChannelSlug}` : `#${messageChannelId}`;
+    combinedBody = `[${agentDisplayName} in ${channelLabel}]: ${text}\n\n${FANOUT_GUIDANCE}`;
+  }
+
+  // If coordinator provided accumulated responses from prior agents in this round, append them
+  const _fanOutRoundInfo = getFanOutRoundInfo(ctx);
+  console.log(
+    `[fanout-process] getFanOutRoundInfo: round=${_fanOutRoundInfo?.round} responses=${_fanOutRoundInfo?.accumulatedResponses?.length} accountId=${accountId}`,
+  );
+  if (_fanOutRoundInfo && _fanOutRoundInfo.accumulatedResponses.length > 0) {
+    const accContext = _fanOutRoundInfo.accumulatedResponses.map((r) => `> ${r}`).join("\n\n");
+    combinedBody = `${combinedBody}\n\n--- Prior agent responses this round (round ${_fanOutRoundInfo.round}) ---\n${accContext}`;
+  } else if ((channelConfig?.fanOut ?? guildInfo?.fanOut ?? false) && !ctx.isFanOutBotMessage) {
+    // Human message in fan-out channel — add guidance
+    combinedBody = `${combinedBody}\n\n${FANOUT_GUIDANCE}`;
+  }
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
@@ -323,9 +344,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }))
       : undefined;
 
+  // For fan-out messages with accumulated context, use combinedBody as BodyForAgent
+  // so agents see prior responses in the conversation
+  const fanOutBodyForAgent =
+    _fanOutRoundInfo && _fanOutRoundInfo.accumulatedResponses.length > 0 ? combinedBody : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: baseText ?? text,
+    BodyForAgent: fanOutBodyForAgent ?? baseText ?? text,
     InboundHistory: inboundHistory,
     RawBody: baseText,
     CommandBody: baseText,
@@ -760,17 +786,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       limit: historyLimit,
     });
 
-  // Notify fan-out coordinator of response
-  if (channelFanOut) {
-    const { notifyFanOutResponse } = await import("./fanout-coordinator.js");
-    const responseText =
-      fanOutDeliveredTexts.length > 0 ? fanOutDeliveredTexts.join("\n") : undefined;
-    await notifyFanOutResponse({
-      accountId,
-      channelId: messageChannelId,
-      triggerMessageId: message.id,
-      responseText,
-    });
-  }
+    // Notify fan-out coordinator of response
+    if (channelFanOut) {
+      const { notifyFanOutResponse } = await import("./fanout-coordinator.js");
+      const responseText =
+        fanOutDeliveredTexts.length > 0 ? fanOutDeliveredTexts.join("\n") : undefined;
+      notifyFanOutResponse({
+        accountId,
+        channelId: messageChannelId,
+        responseText,
+      });
+    }
   }
 }

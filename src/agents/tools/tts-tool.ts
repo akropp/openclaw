@@ -12,6 +12,12 @@ const TtsToolSchema = Type.Object({
   channel: Type.Optional(
     Type.String({ description: "Optional channel id to pick output format (e.g. telegram)." }),
   ),
+  voice: Type.Optional(
+    Type.String({
+      description:
+        "Optional OpenAI TTS voice. Options: alloy (default), echo, fable, onyx, nova, shimmer.",
+    }),
+  ),
 });
 
 export function createTtsTool(opts?: {
@@ -27,11 +33,13 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const voice = readStringParam(params, "voice");
       const cfg = opts?.config ?? loadConfig();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        overrides: voice ? { openai: { voice } } : undefined,
       });
 
       if (result.success && result.audioPath) {

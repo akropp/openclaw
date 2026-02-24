@@ -132,9 +132,10 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
+        // Don't immediately clear TTS on speech start — too aggressive.
+        // Let the transcript callback handle barge-in instead, so brief
+        // sounds/breathing don't cut off the response mid-sentence.
+        // (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);

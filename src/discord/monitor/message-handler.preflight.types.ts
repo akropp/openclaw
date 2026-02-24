@@ -83,17 +83,13 @@ export type DiscordMessagePreflightContext = {
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;
-  allowTextCommands: boolean;
-  shouldBypassMention: boolean;
-  effectiveWasMentioned: boolean;
-  canDetectMention: boolean;
-
-  historyEntry?: HistoryEntry;
   threadBindings: ThreadBindingManager;
 
   /** True when this is a bot message in a fanOut channel (from another agent's bot). */
   isFanOutBotMessage: boolean;
 };
+
+export type DiscordMessagePreflightParams = {
   cfg: LoadedConfig;
   discordConfig: DiscordMessagePreflightContext["discordConfig"];
   accountId: string;

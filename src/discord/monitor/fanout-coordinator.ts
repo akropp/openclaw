@@ -6,12 +6,18 @@
  * releases agents one at a time so each sees the accumulated conversation.
  */
 
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { logVerbose } from "../../globals.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
+
+function fanoutLog(msg: string): void {
+  const ts = new Date().toISOString();
+  console.log(`${ts} [fanout] ${msg}`);
+  logVerbose(`fanout: ${msg}`);
+}
 
 const AGENT_COLLECTION_WINDOW_MS = 1500;
-const AGENT_RESPONSE_TIMEOUT_MS = 60_000;
+const AGENT_RESPONSE_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_ROUNDS = 20;
 
 const FANOUT_GUIDANCE =
@@ -24,6 +30,7 @@ type AgentRegistration = {
   botUserId: string;
   ctx: DiscordMessagePreflightContext;
   processMessage: (ctx: DiscordMessagePreflightContext) => Promise<void>;
+  skipFirstRound?: boolean; // true for the agent that sent the triggering message
 };
 
 type PendingRound = {
@@ -39,6 +46,13 @@ type RoundResult = {
   botUserId: string;
   responded: boolean; // true = sent content (non-NO_REPLY)
   responseText?: string;
+  skipped?: boolean; // true = no new messages, agent was not invoked
+};
+
+type ConversationMessage = {
+  agentId: string; // accountId of sender, or "human" for external messages
+  content: string;
+  index: number; // monotonic index within the conversation
 };
 
 type ChannelState = {
@@ -49,6 +63,12 @@ type ChannelState = {
   roundLimit: number;
   /** Track pending response callbacks per accountId */
   responseCallbacks: Map<string, (responseText: string | undefined) => void>;
+  /** Per-agent watermark tracking for message delivery */
+  conversation: {
+    messages: ConversationMessage[];
+    watermarks: Map<string, number>; // agentId → last seen message index
+    nextIndex: number;
+  };
 };
 
 // ── Singleton state ──
@@ -65,6 +85,11 @@ function getOrCreateChannelState(channelId: string, maxRounds?: number): Channel
       previousRoundResponders: new Set(),
       roundLimit: maxRounds ?? DEFAULT_MAX_ROUNDS,
       responseCallbacks: new Map(),
+      conversation: {
+        messages: [],
+        watermarks: new Map(),
+        nextIndex: 0,
+      },
     };
     channelStates.set(channelId, state);
   }
@@ -97,10 +122,11 @@ export function registerFanOutAgent(params: {
   const { channelId, messageId, accountId, botUserId, ctx, processMessage, maxRounds } = params;
   const state = getOrCreateChannelState(channelId, maxRounds);
 
-  // Self-exclusion: if this bot sent the triggering message, skip
-  if (params.triggerBotUserId && params.triggerBotUserId === botUserId) {
-    logVerbose(`fanout: skip self-delivery for ${accountId} in ${channelId}`);
-    return true; // coordinator handles it (by skipping)
+  // Self-exclusion: if this bot sent the triggering message, skip Round 1
+  // but participate in Round 2+ so they can see other agents' responses
+  const isTriggerAgent = Boolean(params.triggerBotUserId && params.triggerBotUserId === botUserId);
+  if (isTriggerAgent) {
+    fanoutLog(` ${accountId} is trigger agent — will skip round 1, join round 2+`);
   }
 
   // If we're in the middle of processing a round and this is a NEW message
@@ -125,7 +151,13 @@ export function registerFanOutAgent(params: {
     startNewPendingRound(state, messageId, params);
   } else {
     // Add to existing pending round
-    addRegistration(state.pendingRound, { accountId, botUserId, ctx, processMessage });
+    addRegistration(state.pendingRound, {
+      accountId,
+      botUserId,
+      ctx,
+      processMessage,
+      skipFirstRound: isTriggerAgent,
+    });
   }
 
   return true;
@@ -184,11 +216,15 @@ function startNewPendingRound(
     mentionedBotIds: params.mentionedUserIds,
   };
 
+  const isSelfTrigger = Boolean(
+    params.triggerBotUserId && params.triggerBotUserId === params.botUserId,
+  );
   addRegistration(pending, {
     accountId: params.accountId,
     botUserId: params.botUserId,
     ctx: params.ctx,
     processMessage: params.processMessage,
+    skipFirstRound: isSelfTrigger,
   });
 
   state.pendingRound = pending;
@@ -273,25 +309,96 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
   state.currentRound++;
 
   const isFirstRound = state.currentRound === 1;
+  const conv = state.conversation;
+
+  // On first round, add the trigger message to the conversation log
+  // (subsequent rounds are chained from bot responses which get added via notifyFanOutResponse)
+  if (isFirstRound) {
+    // Reset conversation state for a new conversation
+    conv.messages = [];
+    conv.watermarks.clear();
+    conv.nextIndex = 0;
+
+    // Add the triggering (human) message
+    const triggerContent = pending.registrations[0]?.ctx?.messageText ?? "(trigger message)";
+    conv.messages.push({
+      agentId: "human",
+      content: triggerContent,
+      index: conv.nextIndex++,
+    });
+  }
+
+  // Determine which agents have new messages and separate them
+  const agentsWithNewMessages: AgentRegistration[] = [];
+  const agentsWithoutNewMessages: AgentRegistration[] = [];
+
+  for (const reg of pending.registrations) {
+    const watermark = conv.watermarks.get(reg.accountId) ?? -1;
+    const hasNew = conv.messages.some((m) => m.index > watermark);
+    if (hasNew) {
+      agentsWithNewMessages.push(reg);
+    } else {
+      agentsWithoutNewMessages.push(reg);
+    }
+  }
+
+  // Order only agents that have new messages
   const ordered = orderAgents(
-    pending.registrations,
+    agentsWithNewMessages,
     pending.mentionedBotIds,
     state.previousRoundResponders,
     isFirstRound,
   );
 
   logVerbose(
-    `fanout: round ${state.currentRound} starting with ${ordered.length} agents in channel (msg=${pending.triggerMessageId})`,
+    `fanout: round ${state.currentRound} starting with ${ordered.length} agents (${agentsWithoutNewMessages.length} skipped, no new messages) (msg=${pending.triggerMessageId})`,
   );
 
   const results: RoundResult[] = [];
-  const accumulatedResponses: string[] = [];
+
+  // Record skipped agents
+  for (const reg of agentsWithoutNewMessages) {
+    results.push({
+      accountId: reg.accountId,
+      botUserId: reg.botUserId,
+      responded: false,
+      skipped: true,
+    });
+    fanoutLog(` round ${state.currentRound} → skip ${reg.accountId} (no new messages)`);
+  }
 
   for (const reg of ordered) {
-    logVerbose(`fanout: round ${state.currentRound} → agent ${reg.accountId}`);
+    // Skip trigger agent in round 1 — they sent the message, no need to echo it back
+    if (reg.skipFirstRound && state.currentRound === 1) {
+      fanoutLog(` round ${state.currentRound} → skip ${reg.accountId} (trigger agent, round 1)`);
+      results.push({
+        accountId: reg.accountId,
+        botUserId: reg.botUserId,
+        responded: false,
+        skipped: true,
+      });
+      continue;
+    }
 
-    // Build modified context with accumulated responses
+    fanoutLog(` round ${state.currentRound} → agent ${reg.accountId}`);
+
+    // Build context with only messages newer than this agent's watermark
+    const watermark = conv.watermarks.get(reg.accountId) ?? -1;
+    const newMessages = conv.messages.filter((m) => m.index > watermark);
+    const accumulatedResponses = newMessages
+      .filter((m) => m.agentId !== "human")
+      .map((m) => `[${m.agentId}]: ${m.content}`);
+
+    fanoutLog(
+      `agent ${reg.accountId}: watermark=${watermark} newMessages=${newMessages.length} accumulated=${accumulatedResponses.length} convTotal=${conv.messages.length}`,
+    );
     const modifiedCtx = buildAccumulatedContext(reg.ctx, accumulatedResponses, state.currentRound);
+
+    // Update watermark BEFORE processing — agent now "sees" all current messages
+    conv.watermarks.set(
+      reg.accountId,
+      conv.messages.length > 0 ? conv.messages[conv.messages.length - 1].index : -1,
+    );
 
     // Create response promise
     const responsePromise = new Promise<string | undefined>((resolve) => {
@@ -301,7 +408,7 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
       setTimeout(() => {
         if (state.responseCallbacks.has(reg.accountId)) {
           state.responseCallbacks.delete(reg.accountId);
-          logVerbose(`fanout: agent ${reg.accountId} timed out in round ${state.currentRound}`);
+          fanoutLog(` agent ${reg.accountId} timed out in round ${state.currentRound}`);
           resolve(undefined);
         }
       }, AGENT_RESPONSE_TIMEOUT_MS);
@@ -311,12 +418,15 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
     try {
       await reg.processMessage(modifiedCtx);
     } catch (err) {
-      logVerbose(`fanout: agent ${reg.accountId} processing error: ${String(err)}`);
+      fanoutLog(` agent ${reg.accountId} processing error: ${String(err)}`);
     }
 
     // Wait for response
     const responseText = await responsePromise;
     const responded = Boolean(responseText && !isSilentReplyText(responseText));
+    fanoutLog(
+      `agent ${reg.accountId} response: responded=${responded} text=${responseText?.substring(0, 80) ?? "(none)"}`,
+    );
 
     results.push({
       accountId: reg.accountId,
@@ -326,7 +436,14 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
     });
 
     if (responded && responseText) {
-      accumulatedResponses.push(responseText);
+      // Add response to conversation log
+      conv.messages.push({
+        agentId: reg.accountId,
+        content: responseText,
+        index: conv.nextIndex++,
+      });
+      // Update this agent's watermark to include their own response
+      conv.watermarks.set(reg.accountId, conv.messages[conv.messages.length - 1].index);
     }
   }
 
@@ -336,28 +453,72 @@ async function executeRound(state: ChannelState, pending: PendingRound): Promise
     results.filter((r) => r.responded).map((r) => r.accountId),
   );
 
+  const respondedCount = results.filter((r) => r.responded).length;
+  const skippedCount = results.filter((r) => r.skipped).length;
   logVerbose(
-    `fanout: round ${state.currentRound} complete. ${results.filter((r) => r.responded).length}/${results.length} agents responded.`,
+    `fanout: round ${state.currentRound} complete. ${respondedCount} responded, ${skippedCount} skipped, ${results.length - respondedCount - skippedCount} NO_REPLY.`,
   );
 
   state.isProcessing = false;
 
   // Round chaining: if any agent responded and we haven't hit the limit, trigger another round
+  fanoutLog(
+    `round ${state.currentRound} decision: anyResponded=${anyResponded} limit=${state.roundLimit} pendingRound=${!!state.pendingRound}`,
+  );
   if (anyResponded && state.currentRound < state.roundLimit) {
     // Check if a new pending round arrived while we were processing
     if (state.pendingRound) {
       void executeRound(state, state.pendingRound);
+    } else {
+      // No new Discord messages yet — schedule a continuation round with the same registrations
+      // so agents who haven't seen the latest responses get a chance
+      scheduleChainedRound(state, pending);
     }
-    // Otherwise, chained rounds are triggered by the bot messages arriving in Discord
-    // (each bot's response is a new Discord message that goes through preflight again)
   } else {
     if (state.currentRound >= state.roundLimit) {
-      logVerbose(`fanout: round limit (${state.roundLimit}) reached in channel`);
+      fanoutLog(` round limit (${state.roundLimit}) reached in channel`);
     }
     // Reset round counter — next external message starts fresh
     state.currentRound = 0;
     state.previousRoundResponders.clear();
+    // Check if a new message arrived while we were processing
+    if (state.pendingRound) {
+      fanoutLog(` processing queued pending round after conversation ended`);
+      void executeRound(state, state.pendingRound);
+    }
   }
+}
+
+function scheduleChainedRound(state: ChannelState, previousPending: PendingRound): void {
+  // Check if any agent still has unseen messages
+  const conv = state.conversation;
+  const hasAgentsWithNewMessages = previousPending.registrations.some((reg) => {
+    const watermark = conv.watermarks.get(reg.accountId) ?? -1;
+    return conv.messages.some((m) => m.index > watermark);
+  });
+
+  if (!hasAgentsWithNewMessages) {
+    fanoutLog(` no agents have new messages, ending conversation`);
+    state.currentRound = 0;
+    state.previousRoundResponders.clear();
+    if (state.pendingRound) {
+      fanoutLog(` processing queued pending round after conversation ended`);
+      void executeRound(state, state.pendingRound);
+    }
+    return;
+  }
+
+  // Create a new pending round with the same registrations for chained processing
+  const chainedPending: PendingRound = {
+    triggerMessageId: previousPending.triggerMessageId,
+    triggerAccountId: previousPending.triggerAccountId,
+    registrations: previousPending.registrations,
+    collectionTimer: null,
+    mentionedBotIds: previousPending.mentionedBotIds,
+  };
+
+  fanoutLog(` scheduling chained round`);
+  void executeRound(state, chainedPending);
 }
 
 function buildAccumulatedContext(

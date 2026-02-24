@@ -1,6 +1,7 @@
 import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import { loadCoreAgentDeps } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
@@ -198,6 +199,11 @@ export async function createVoiceCallRuntime(params: {
     await cleanupTailscaleExposure(config);
     await webhookServer.stop();
   };
+
+  // Pre-warm core agent dependencies so the first call doesn't pay cold-start cost
+  loadCoreAgentDeps()
+    .then(() => log.info("[voice-call] Core agent deps pre-warmed"))
+    .catch((err) => log.warn(`[voice-call] Pre-warm failed (will retry on first call): ${err}`));
 
   log.info("[voice-call] Runtime initialized");
   log.info(`[voice-call] Webhook URL: ${webhookUrl}`);

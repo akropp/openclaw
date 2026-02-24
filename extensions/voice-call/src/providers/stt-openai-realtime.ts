@@ -63,7 +63,7 @@ export class OpenAIRealtimeSTTProvider {
     this.apiKey = config.apiKey;
     this.model = config.model || "gpt-4o-transcribe";
     this.silenceDurationMs = config.silenceDurationMs || 800;
-    this.vadThreshold = config.vadThreshold || 0.5;
+    this.vadThreshold = config.vadThreshold || 0.7;
   }
 
   /**
@@ -131,6 +131,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
             input_audio_format: "g711_ulaw",
             input_audio_transcription: {
               model: this.model,
+              language: "en",
             },
             turn_detection: {
               type: "server_vad",
