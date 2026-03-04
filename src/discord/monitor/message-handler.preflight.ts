@@ -200,6 +200,7 @@ export async function preflightDiscordMessage(
           const { code, created } = await upsertChannelPairingRequest({
             channel: "discord",
             id: author.id,
+            accountId: params.accountId,
             meta: {
               tag: formatDiscordUserTag(author),
               name: author.username ?? undefined,
