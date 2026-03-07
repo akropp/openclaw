@@ -300,9 +300,21 @@ export async function preflightDiscordMessage(
     // Pass parent peer for thread binding inheritance
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
-  const threadBinding = earlyThreadChannel
+  let threadBinding = earlyThreadChannel
     ? params.threadBindings.getByThreadId(messageChannelId)
     : undefined;
+  const configuredRoute =
+    threadBinding == null
+      ? resolveConfiguredAcpRoute({
+          cfg: freshCfg,
+          route,
+          channel: "discord",
+          accountId: params.accountId,
+          conversationId: messageChannelId,
+          parentConversationId: earlyThreadParentId,
+        })
+      : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
       accountId: params.accountId,
