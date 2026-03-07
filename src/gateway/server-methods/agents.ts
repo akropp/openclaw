@@ -31,6 +31,7 @@ import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
+import { logDebug } from "../../logger.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -248,6 +249,11 @@ async function resolveAgentWorkspaceFilePath(params: {
           "symlink target is outside workspace root (add the target directory to workspaceConfig.allowedExternalPaths to permit)",
       };
     }
+    if (!withinWorkspace) {
+      logDebug(
+        `[agents] symlink permitted: ${candidatePath} -> ${targetReal} (within allowedExternalPaths)`,
+      );
+    }
 
     let targetStat: Awaited<ReturnType<typeof fs.stat>>;
     try {
@@ -306,6 +312,9 @@ async function statFileSafely(
       if (!allowedExternalPaths || !isWithinAllowedPrefixes(realPath, allowedExternalPaths)) {
         return null;
       }
+      logDebug(
+        `[agents] symlink stat permitted: ${filePath} -> ${realPath} (within allowedExternalPaths)`,
+      );
       const realStat = await fs.stat(realPath);
       if (!realStat.isFile() || realStat.nlink > 1) {
         return null;
@@ -816,16 +825,63 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
-    try {
-      await writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: name,
-        data: content,
-        encoding: "utf8",
-      });
-    } catch {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
+
+    // Determine whether the resolved ioPath is within the workspace root or in an
+    // operator-trusted external directory (allowedExternalPaths symlink target).
+    // For workspace-internal files: use the existing relative-path + workspaceReal root.
+    // For external symlink targets: write directly to ioPath using its parent as the
+    // root, so writeFileWithinRoot never receives a `..`-prefixed relative path that
+    // would be rejected by the root-boundary checks in openWritableFileWithinRoot.
+    const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
+    const isExternalSymlinkTarget =
+      relativeWritePath.startsWith("..") || path.isAbsolute(relativeWritePath);
+
+    if (isExternalSymlinkTarget) {
+      // Only allow if the target was explicitly cleared by allowedExternalPaths during
+      // resolveWorkspaceFilePathOrRespond above.  That function would have returned
+      // undefined (already responded with an error) if the target was not permitted,
+      // so reaching this point means allowedExternalPaths approved the ioPath.
+      if (!allowedExternalPaths.length) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: path.dirname(resolvedPath.ioPath),
+          relativePath: path.basename(resolvedPath.ioPath),
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+    } else {
+      if (!relativeWritePath) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      // Reject in-workspace symlink aliases: if the resolved ioPath doesn't match
+      // the requested file name, the workspace file is a symlink pointing to a
+      // different location within the workspace.  Allow reads (for shared context
+      // files) but reject writes to prevent an agent from overwriting an arbitrary
+      // workspace file via a symlink alias.
+      const normalizedName = path.normalize(name);
+      if (relativeWritePath !== normalizedName) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: resolvedPath.workspaceReal,
+          relativePath: relativeWritePath,
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
     }
     const meta = await statFileSafely(resolvedPath.ioPath, allowedExternalPaths);
     respond(
