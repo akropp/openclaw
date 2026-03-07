@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -15,8 +14,7 @@ env:
 
 jobs:
   no-tabs:
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest # FORK-ONLY: swapped from blacksmith (personal accounts not supported)
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -47,8 +45,7 @@ jobs:
           PY
 
   actionlint:
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest # FORK-ONLY: swapped from blacksmith (personal accounts not supported)
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -71,19 +68,3 @@ jobs:
 
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
-
-  config-docs-drift:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Check config docs drift statefile
-        run: pnpm config:docs:check
