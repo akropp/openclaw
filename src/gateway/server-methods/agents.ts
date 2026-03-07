@@ -851,25 +851,54 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+
+    // Determine whether the resolved ioPath is within the workspace root or in an
+    // operator-trusted external directory (allowedExternalPaths symlink target).
+    // For workspace-internal files: use the existing relative-path + workspaceReal root.
+    // For external symlink targets: write directly to ioPath using its parent as the
+    // root, so writeFileWithinRoot never receives a `..`-prefixed relative path that
+    // would be rejected by the root-boundary checks in openWritableFileWithinRoot.
     const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
-    if (
-      !relativeWritePath ||
-      relativeWritePath.startsWith("..") ||
-      path.isAbsolute(relativeWritePath)
-    ) {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
-    }
-    try {
-      await agentsHandlerDeps.writeFileWithinRoot({
-        rootDir: resolvedPath.workspaceReal,
-        relativePath: relativeWritePath,
-        data: content,
-        encoding: "utf8",
-      });
-    } catch {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
+    const isExternalSymlinkTarget =
+      relativeWritePath.startsWith("..") || path.isAbsolute(relativeWritePath);
+
+    if (isExternalSymlinkTarget) {
+      if (!allowedExternalPaths.length) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await agentsHandlerDeps.writeFileWithinRoot({
+          rootDir: path.dirname(resolvedPath.ioPath),
+          relativePath: path.basename(resolvedPath.ioPath),
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+    } else {
+      if (!relativeWritePath) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      const normalizedName = path.normalize(name);
+      if (relativeWritePath !== normalizedName) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await agentsHandlerDeps.writeFileWithinRoot({
+          rootDir: resolvedPath.workspaceReal,
+          relativePath: relativeWritePath,
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
     }
     const meta = await statFileSafely(resolvedPath.ioPath, allowedExternalPaths);
     respond(
