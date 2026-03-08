@@ -529,7 +529,6 @@ export async function preflightDiscordMessage(
         channelConfig,
         guildInfo,
       });
-  const isBoundThreadSession = Boolean(boundSessionKey && threadChannel);
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     isBoundThreadSession,
