@@ -86,8 +86,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
-    "swarm.list",
-    "swarm.logs",
     "tasks.list",
     "provider.usage",
   ],
@@ -139,7 +137,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "set-heartbeats",
     "system-event",
     "agents.files.set",
-    "swarm.kill",
   ],
 };
 

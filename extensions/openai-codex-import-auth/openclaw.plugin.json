@@ -1,0 +1,9 @@
+{
+  "id": "openai-codex-import-auth",
+  "providers": ["openai-codex-import"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
