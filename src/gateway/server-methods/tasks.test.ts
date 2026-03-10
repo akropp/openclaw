@@ -445,11 +445,45 @@ describe("deliverTaskNotification", () => {
     expect(updated.tasks).toHaveLength(0);
   });
 
-  it("skips second concurrent notify with same idempotency key written during fan-out", async () => {
+  it("serialises concurrent notify calls with same key — second skips without sending", async () => {
     const registryPath = writeRegistry(tmpDir, [
       makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
     ]);
-    // Simulate a concurrent notify writing the idempotency key during our fan-out
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+
+    // Fire two concurrent calls with the same key
+    const [r1, r2] = await Promise.all([
+      deliverTaskNotification({
+        taskId: "t1",
+        event: "completed",
+        message: "done",
+        registryPath,
+        sendToSession,
+      }),
+      deliverTaskNotification({
+        taskId: "t1",
+        event: "completed",
+        message: "done",
+        registryPath,
+        sendToSession,
+      }),
+    ]);
+
+    // Exactly one should have delivered; the other should be skipped
+    const delivered = [r1, r2].filter((r) => (r.delivered?.length ?? 0) > 0);
+    const skipped = [r1, r2].filter((r) => r.skipped === "already delivered");
+    expect(delivered).toHaveLength(1);
+    expect(skipped).toHaveLength(1);
+
+    // sendToSession called exactly once — no duplicate delivery
+    expect(sendToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("post-send guard still catches external concurrent writes (e.g. different process)", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    // Simulate an external write setting the key during our fan-out
     const sendToSession = vi.fn().mockImplementation(async () => {
       const reg = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
       reg.tasks[0].notifiedEvents["completed"] = true;
@@ -462,7 +496,7 @@ describe("deliverTaskNotification", () => {
       registryPath,
       sendToSession,
     });
-    // Delivery happened (sendToSession was called) but post-send guard detected concurrent write
+    // Delivery happened but post-send guard detected the external write
     expect(result.skipped).toBe("already delivered");
     expect(result.delivered).toHaveLength(0);
   });
