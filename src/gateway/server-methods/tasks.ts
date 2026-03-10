@@ -124,7 +124,17 @@ export async function deliverTaskNotification(opts: {
     }
   }
 
-  // Build the event log entry
+  // Only mark idempotency and log the event if ALL watchers succeeded (or there were none).
+  // If any watcher failed, leave the idempotency key unset so the caller can retry — failed
+  // watchers will be re-attempted and already-delivered watchers will receive a duplicate,
+  // but that is preferable to permanently silencing failed watchers.
+  const allSucceeded = failed.length === 0;
+
+  if (!allSucceeded) {
+    return { delivered, failed };
+  }
+
+  // Build the event log entry (only appended on full success to avoid duplicate log entries)
   const newEvent: TaskEvent = {
     event,
     message,
@@ -132,25 +142,31 @@ export async function deliverTaskNotification(opts: {
     timestamp: Date.now(),
   };
 
-  const updatedEvents = [...task.events, newEvent].slice(-MAX_TASK_EVENTS);
+  // Reload registry before writing to pick up any concurrent mutations (watch/unwatch/remove)
+  // that may have occurred during the async watcher sends above.
+  const freshRegistry = loadTaskRegistry(registryPath);
+  const freshIndex = freshRegistry.tasks.findIndex((t) => t.id === taskId);
+  if (freshIndex === -1) {
+    // Task was removed concurrently; discard — do not resurrect it.
+    return { delivered, failed };
+  }
 
-  // Mark idempotency flag if at least one watcher received the message,
-  // or if there were no watchers (event was processed; prevents repeated logging).
-  const markDelivered = delivered.length > 0 || watchers.length === 0;
+  const freshTask = freshRegistry.tasks[freshIndex];
+  const updatedEvents = [...freshTask.events, newEvent].slice(-MAX_TASK_EVENTS);
 
   const updatedTask: TaskEntry = {
-    ...task,
+    ...freshTask,
     updatedAt: Date.now(),
     ...(status !== undefined ? { status } : {}),
     events: updatedEvents,
     notifiedEvents: {
-      ...task.notifiedEvents,
-      ...(markDelivered ? { [ikey]: true } : {}),
+      ...freshTask.notifiedEvents,
+      [ikey]: true,
     },
   };
 
-  registry.tasks[taskIndex] = updatedTask;
-  saveTaskRegistry(registry, registryPath);
+  freshRegistry.tasks[freshIndex] = updatedTask;
+  saveTaskRegistry(freshRegistry, registryPath);
 
   return { delivered, failed };
 }
@@ -343,7 +359,16 @@ export const taskHandlers: GatewayRequestHandlers = {
       sendToSession,
     });
 
-    respond(true, { ok: true, delivered: result.delivered, failed: result.failed }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        delivered: result.delivered,
+        failed: result.failed,
+        ...(result.skipped ? { skipped: result.skipped } : {}),
+      },
+      undefined,
+    );
   },
 
   /**
