@@ -88,6 +88,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.get",
     "swarm.list",
     "swarm.logs",
+    "tasks.list",
     "provider.usage",
   ],
   [WRITE_SCOPE]: [
@@ -108,6 +109,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "browser.request",
     "push.test",
     "node.pending.enqueue",
+    "tasks.register",
+    "tasks.watch",
+    "tasks.unwatch",
+    "tasks.notify",
+    "tasks.remove",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
