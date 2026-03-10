@@ -303,6 +303,9 @@ describe("deliverTaskNotification", () => {
     });
     expect(result.delivered).toEqual(["good-session"]);
     expect(result.failed).toEqual(["bad-session"]);
+    // Idempotency key must NOT be set on partial failure so failed watchers can be retried
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    expect(updated.tasks[0]?.notifiedEvents["completed"]).toBeUndefined();
   });
 
   it("marks idempotency key for tasks with no watchers", async () => {
@@ -336,6 +339,54 @@ describe("deliverTaskNotification", () => {
     const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
     // Not marked delivered since nothing got through
     expect(updated.tasks[0]?.notifiedEvents["completed"]).toBeUndefined();
+  });
+
+  it("does not append duplicate event log entries on repeated failed retries", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "bad-session", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockRejectedValue(new Error("failed"));
+    // Fire same event twice (simulating retries)
+    await deliverTaskNotification({
+      taskId: "t1",
+      event: "completed",
+      message: "done",
+      registryPath,
+      sendToSession,
+    });
+    await deliverTaskNotification({
+      taskId: "t1",
+      event: "completed",
+      message: "done",
+      registryPath,
+      sendToSession,
+    });
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    // Event log should remain empty since no delivery succeeded
+    expect(updated.tasks[0]?.events).toHaveLength(0);
+  });
+
+  it("does not resurrect a task removed concurrently during async sends", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockImplementation(async () => {
+      // Simulate concurrent task removal during send
+      const reg = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+      reg.tasks = reg.tasks.filter((t) => t.id !== "t1");
+      fs.writeFileSync(registryPath, JSON.stringify(reg, null, 2));
+    });
+    const result = await deliverTaskNotification({
+      taskId: "t1",
+      event: "completed",
+      message: "done",
+      registryPath,
+      sendToSession,
+    });
+    expect(result.delivered).toEqual(["s1"]);
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    // Task should not have been re-created by the registry write
+    expect(updated.tasks).toHaveLength(0);
   });
 });
 

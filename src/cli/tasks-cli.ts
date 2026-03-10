@@ -101,6 +101,23 @@ export function registerTasksCli(program: Command) {
       }),
   );
 
+  // tasks unwatch
+  addGatewayClientOptions(
+    tasks
+      .command("unwatch")
+      .description("Remove a session watcher from a task")
+      .requiredOption("--id <id>", "Task identifier")
+      .requiredOption("--session <sessionKey>", "Session key to unsubscribe")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        const res = await callGatewayFromCli("tasks.unwatch", opts, {
+          taskId: opts.id,
+          sessionKey: opts.session,
+        });
+        console.log(JSON.stringify(res, null, 2));
+      }),
+  );
+
   // tasks remove
   addGatewayClientOptions(
     tasks
