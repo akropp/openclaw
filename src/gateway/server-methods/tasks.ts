@@ -10,6 +10,18 @@ import type { GatewayRequestHandlers } from "./types.js";
 // Maximum number of events to keep per task (prevents unbounded growth)
 const MAX_TASK_EVENTS = 50;
 
+/**
+ * In-flight lock map: prevents concurrent tasks.notify calls with the same
+ * (taskId, idempotencyKey) from both executing fan-out.
+ *
+ * Key: `${taskId}::${ikey}`
+ * Value: the promise of the in-progress deliver call
+ *
+ * Since OpenClaw gateway runs in a single Node.js process, this Map is sufficient
+ * to serialise concurrent WS-dispatched requests — no cross-process locking needed.
+ */
+const inFlightNotify = new Map<string, Promise<ReturnType<typeof _deliverTaskNotification>>>();
+
 export type TaskWatcher = {
   sessionKey: string;
   label?: string;
@@ -70,11 +82,10 @@ export function saveTaskRegistry(registry: TaskRegistry, registryPath = getRegis
 export type SendToSessionFn = (sessionKey: string, message: string) => Promise<void>;
 
 /**
- * Deliver a notification to all watchers of a task.
- * Logs the event, marks the idempotency key, updates status, and fans out to watchers.
- * Idempotent: if the idempotency key was already delivered, returns immediately.
+ * Inner implementation — do not call directly; use deliverTaskNotification() which
+ * serialises concurrent calls for the same (taskId, idempotencyKey) via inFlightNotify.
  */
-export async function deliverTaskNotification(opts: {
+async function _deliverTaskNotification(opts: {
   taskId: string;
   event: string;
   message: string;
@@ -187,6 +198,40 @@ export async function deliverTaskNotification(opts: {
   saveTaskRegistry(freshRegistry, registryPath);
 
   return { delivered, failed };
+}
+
+/**
+ * Deliver a notification to all watchers of a task.
+ * Idempotent and serialised: concurrent calls with the same (taskId, idempotencyKey)
+ * wait for the in-flight call to complete, then the second caller reads the now-set
+ * idempotency key and returns skipped — preventing duplicate fan-out.
+ */
+export async function deliverTaskNotification(
+  opts: Parameters<typeof _deliverTaskNotification>[0],
+): Promise<ReturnType<typeof _deliverTaskNotification>> {
+  // Normalise key the same way the inner function does, so the lock key matches
+  const rawKey = opts.idempotencyKey?.trim();
+  const ikey = rawKey && rawKey.length > 0 ? rawKey : opts.event;
+  const lockKey = `${opts.taskId}::${ikey}`;
+
+  const existing = inFlightNotify.get(lockKey);
+  if (existing) {
+    // Another call is already in flight for this (taskId, ikey).
+    // Wait for it to finish, then attempt delivery — the post-send guard will
+    // see the idempotency key is now set and return skipped.
+    await existing;
+  }
+
+  const promise = _deliverTaskNotification(opts);
+  inFlightNotify.set(lockKey, promise);
+  try {
+    return await promise;
+  } finally {
+    // Only delete our own entry; a racing call may have already replaced it.
+    if (inFlightNotify.get(lockKey) === promise) {
+      inFlightNotify.delete(lockKey);
+    }
+  }
 }
 
 export const taskHandlers: GatewayRequestHandlers = {
