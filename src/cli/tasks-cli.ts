@@ -17,6 +17,12 @@ export function registerTasksCli(program: Command) {
       .requiredOption("--id <id>", "Task identifier")
       .option("--desc <description>", "Human-readable description")
       .option("--status <status>", "Initial status (e.g. running, done, failed)")
+      .option(
+        "--meta <key=value>",
+        "Metadata key=value pair (repeatable, e.g. --meta agent=codex --meta repo=/path)",
+        (val: string, acc: string[]) => [...acc, val],
+        [] as string[],
+      )
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         const params: Record<string, unknown> = { taskId: opts.id };
@@ -25,6 +31,18 @@ export function registerTasksCli(program: Command) {
         }
         if (opts.status) {
           params.status = opts.status;
+        }
+        if (Array.isArray(opts.meta) && opts.meta.length > 0) {
+          const metadata: Record<string, string> = {};
+          for (const pair of opts.meta as string[]) {
+            const eq = pair.indexOf("=");
+            if (eq > 0) {
+              metadata[pair.slice(0, eq)] = pair.slice(eq + 1);
+            }
+          }
+          if (Object.keys(metadata).length > 0) {
+            params.metadata = metadata;
+          }
         }
         const res = await callGatewayFromCli("tasks.register", opts, params);
         console.log(JSON.stringify(res, null, 2));
