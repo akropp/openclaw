@@ -176,9 +176,16 @@ function isWithinPath(child: string, parent: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-/** Return true if realPath is within at least one of the allowed prefix directories. */
+/** Return true if realPath is within at least one of the allowed prefix directories.
+ *
+ * Relative prefixes are silently ignored — they are unsafe because they would be
+ * resolved against process.cwd() (the gateway startup directory), making the trust
+ * boundary dependent on runtime context rather than explicit operator intent.
+ * The documented contract is that entries must be absolute paths; relative ones
+ * are a misconfiguration and must not grant access.
+ */
 function isWithinAllowedPrefixes(realPath: string, prefixes: string[]): boolean {
-  return prefixes.some((prefix) => isWithinPath(realPath, prefix));
+  return prefixes.some((prefix) => path.isAbsolute(prefix) && isWithinPath(realPath, prefix));
 }
 
 /** Merge default + per-agent allowedExternalPaths (union, no duplicates). */

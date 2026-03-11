@@ -276,6 +276,33 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
+  it("ignores relative allowedExternalPaths entries — relative prefix must not grant access", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-relpath-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const sharedDir = path.join(rootDir, "shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(path.join(sharedDir, DEFAULT_AGENTS_FILENAME), "shared content", "utf-8");
+      await fs.symlink(
+        path.join(sharedDir, DEFAULT_AGENTS_FILENAME),
+        path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+      );
+
+      // Pass a relative path (should be ignored — relative paths are misconfiguration)
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir, ["./shared", "../shared"]);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      // Must be missing/rejected, not permitted
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked bootstrap files when target is outside allowedExternalPaths", async () => {
     if (process.platform === "win32") {
       return;
