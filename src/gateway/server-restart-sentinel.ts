@@ -101,8 +101,17 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
       bestEffort: true,
     });
   } catch (err) {
+    // Outbound delivery failed — fall back to system event so the agent
+    // still learns about the restart even if the channel is unreachable.
     enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
   }
+
+  // Always inject a system event into the agent session so it can resume
+  // interrupted work.  The outbound delivery above notifies the *human*;
+  // this notifies the *agent*.  Without it agents go silent after restarts
+  // until someone messages them, even though AGENTS.md tells them to read
+  // active-tasks.md and resume autonomously on GatewayRestart.
+  enqueueSystemEvent(message, { sessionKey });
 }
 
 export function shouldWakeFromRestartSentinel() {
