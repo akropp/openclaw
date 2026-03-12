@@ -557,7 +557,7 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
   }
 
   const existingModels = defaults?.models ?? {};
-  const nextModels: Record<string, { alias?: string }> = {};
+  const nextModels: Record<string, { alias?: string | string[] }> = {};
   for (const key of normalized) {
     nextModels[key] = existingModels[key] ?? {};
   }
