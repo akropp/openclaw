@@ -103,8 +103,13 @@ export async function modelsStatusCommand(
   const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
   const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<Record<string, string>>(
     (acc, [key, entry]) => {
-      const alias = typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
-      if (alias) {
+      const rawAlias = entry?.alias;
+      const aliasList = Array.isArray(rawAlias)
+        ? rawAlias.map((a) => String(a ?? "").trim()).filter(Boolean)
+        : typeof rawAlias === "string" && rawAlias.trim()
+          ? [rawAlias.trim()]
+          : [];
+      for (const alias of aliasList) {
         acc[alias] = key;
       }
       return acc;

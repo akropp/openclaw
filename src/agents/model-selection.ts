@@ -283,16 +283,21 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
+    const rawAlias = (entryRaw as { alias?: string | string[] } | undefined)?.alias;
+    const aliasList = Array.isArray(rawAlias)
+      ? rawAlias.map((a) => String(a ?? "").trim()).filter(Boolean)
+      : [String(rawAlias ?? "").trim()].filter(Boolean);
+    if (aliasList.length === 0) {
       continue;
     }
-    const aliasKey = normalizeAliasKey(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
-    const existing = byKey.get(key) ?? [];
-    existing.push(alias);
-    byKey.set(key, existing);
+    for (const alias of aliasList) {
+      const aliasKey = normalizeAliasKey(alias);
+      byAlias.set(aliasKey, { alias, ref: parsed });
+      const existing = byKey.get(key) ?? [];
+      existing.push(alias);
+      byKey.set(key, existing);
+    }
   }
 
   return { byAlias, byKey };

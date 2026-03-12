@@ -317,7 +317,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return mutated ? nextCfg : cfg;
   }
 
-  const nextModels: Record<string, { alias?: string }> = {
+  const nextModels: Record<string, { alias?: string | string[] }> = {
     ...existingModels,
   };
 

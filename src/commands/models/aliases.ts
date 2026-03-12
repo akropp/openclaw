@@ -17,8 +17,11 @@ export async function modelsAliasesListCommand(
   const models = cfg.agents?.defaults?.models ?? {};
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
-      const alias = entry?.alias?.trim();
-      if (alias) {
+      const rawAlias = entry?.alias;
+      const aliasList = Array.isArray(rawAlias)
+        ? rawAlias.map((a) => String(a ?? "").trim()).filter(Boolean)
+        : [String(rawAlias ?? "").trim()].filter(Boolean);
+      for (const alias of aliasList) {
         acc[alias] = modelKey;
       }
       return acc;
@@ -59,13 +62,28 @@ export async function modelsAliasesAddCommand(
     const modelKey = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {
-      const existing = entry?.alias?.trim();
-      if (existing && existing === alias && key !== modelKey) {
+      const rawExisting = entry?.alias;
+      const existingList = Array.isArray(rawExisting)
+        ? rawExisting.map((a) => String(a ?? "").trim())
+        : [String(rawExisting ?? "").trim()];
+      if (existingList.includes(alias) && key !== modelKey) {
         throw new Error(`Alias ${alias} already points to ${key}.`);
       }
     }
     const existing = nextModels[modelKey] ?? {};
-    nextModels[modelKey] = { ...existing, alias };
+    // Append to existing aliases if any
+    const currentAliases = Array.isArray(existing.alias)
+      ? existing.alias.map((a: string) => String(a ?? "").trim()).filter(Boolean)
+      : existing.alias?.trim()
+        ? [existing.alias.trim()]
+        : [];
+    if (!currentAliases.includes(alias)) {
+      currentAliases.push(alias);
+    }
+    nextModels[modelKey] = {
+      ...existing,
+      alias: currentAliases.length === 1 ? currentAliases[0] : currentAliases,
+    };
     return {
       ...cfg,
       agents: {
@@ -88,8 +106,17 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
     const nextModels = { ...cfg.agents?.defaults?.models };
     let found = false;
     for (const [key, entry] of Object.entries(nextModels)) {
-      if (entry?.alias?.trim() === alias) {
-        nextModels[key] = { ...entry, alias: undefined };
+      const rawExisting = entry?.alias;
+      const existingList = Array.isArray(rawExisting)
+        ? rawExisting.map((a) => String(a ?? "").trim())
+        : [String(rawExisting ?? "").trim()];
+      if (existingList.includes(alias)) {
+        const remaining = existingList.filter((a) => a !== alias);
+        nextModels[key] = {
+          ...entry,
+          alias:
+            remaining.length === 0 ? undefined : remaining.length === 1 ? remaining[0] : remaining,
+        };
         found = true;
         break;
       }
@@ -112,7 +139,10 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
   logConfigUpdated(runtime);
   if (
     !updated.agents?.defaults?.models ||
-    Object.values(updated.agents.defaults.models).every((entry) => !entry?.alias?.trim())
+    Object.values(updated.agents.defaults.models).every((entry) => {
+      const a = entry?.alias;
+      return Array.isArray(a) ? a.length === 0 : !a?.trim();
+    })
   ) {
     runtime.log("No aliases configured.");
   }
