@@ -27,6 +27,7 @@ import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
@@ -49,7 +50,6 @@ import {
   resolveMediaList,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
@@ -673,6 +673,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
       const replyToId = replyReference.use();
       await deliverDiscordReply({
+        cfg,
         replies: [payload],
         target: deliverTarget,
         token,
@@ -687,6 +688,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         chunkMode,
         sessionKey: ctxPayload.SessionKey,
         threadBindings,
+        mediaLocalRoots,
       });
       replyReference.markSent();
     },
