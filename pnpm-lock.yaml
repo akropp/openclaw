@@ -486,6 +486,12 @@ importers:
 
   extensions/openai: {}
 
+  extensions/openai-codex-import-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/opencode: {}
 
   extensions/opencode-go: {}

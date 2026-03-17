@@ -357,6 +357,11 @@ export type DiscordAccountConfig = {
     /** Listener timeout in milliseconds. Default: 60000. */
     listenerTimeout?: number;
   };
+  /** Inbound worker configuration. */
+  inboundWorker?: {
+    /** Run timeout in milliseconds. Default: 300000. */
+    runTimeoutMs?: number;
+  };
 };
 
 export type DiscordConfig = {

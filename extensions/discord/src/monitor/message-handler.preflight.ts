@@ -940,5 +940,8 @@ export async function preflightDiscordMessage(
     historyEntry,
     threadBindings: params.threadBindings,
     discordRestFetch: params.discordRestFetch,
+    isFanOutBotMessage: Boolean(
+      channelConfig?.fanOut && author.bot && author.id !== params.botUserId,
+    ),
   };
 }
