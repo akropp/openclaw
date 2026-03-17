@@ -151,9 +151,12 @@ function wakeRecentlyActiveSessions(
 
     for (const agentId of agentIds) {
       const storePath = resolveStorePath(storeCfg, { agentId });
-      let store: Record<string, { lastActiveMs?: number }>;
+      let store: Record<string, { lastActiveMs?: number; updatedAt?: number }>;
       try {
-        store = loadSessionStore(storePath) as Record<string, { lastActiveMs?: number }>;
+        store = loadSessionStore(storePath) as Record<
+          string,
+          { lastActiveMs?: number; updatedAt?: number }
+        >;
       } catch {
         continue; // Store file missing or corrupt — skip this agent
       }
@@ -171,7 +174,9 @@ function wakeRecentlyActiveSessions(
 
         // Wake sessions active within 60s before the restart — they were
         // likely mid-turn when the process went down.
-        const lastActive = entry?.lastActiveMs ?? 0;
+        // Session stores use `updatedAt` (not `lastActiveMs`) as their
+        // activity timestamp, so check both for forward-compatibility.
+        const lastActive = entry?.lastActiveMs ?? entry?.updatedAt ?? 0;
         if (lastActive >= cutoff && lastActive <= restartTimestamp) {
           enqueueSystemEvent(message, { sessionKey: key });
           notified.add(key);
