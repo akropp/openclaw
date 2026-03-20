@@ -408,6 +408,7 @@ export const taskHandlers: GatewayRequestHandlers = {
           message: msg,
           sessionKey: sk,
           senderIsOwner: false,
+          allowModelOverride: false,
           deliver: false,
           bestEffortDeliver: false,
           messageChannel: INTERNAL_MESSAGE_CHANNEL,
