@@ -56,7 +56,7 @@ describe("fanout coordinator", () => {
       const channelId = `chan-${Date.now()}`;
       const firstProcessed: string[] = [];
       const secondProcessed: string[] = [];
-      let releaseFirst: (() => void) | null = null;
+      let releaseFirst: () => void = () => {};
 
       const firstProcess = vi.fn(
         () =>
@@ -93,7 +93,7 @@ describe("fanout coordinator", () => {
         processMessage: secondProcess,
       });
 
-      releaseFirst?.();
+      releaseFirst();
       await Promise.resolve();
       // First round times out with no response.
       await vi.advanceTimersByTimeAsync(60_000);
