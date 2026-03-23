@@ -170,6 +170,18 @@ function makeFileStat(params?: {
   } as unknown as import("node:fs").Stats;
 }
 
+function makeSymlinkStat(): import("node:fs").Stats {
+  return {
+    isFile: () => false,
+    isSymbolicLink: () => true,
+    size: 0,
+    mtimeMs: 1234,
+    dev: 1,
+    ino: 2,
+    nlink: 1,
+  } as unknown as import("node:fs").Stats;
+}
+
 function mockWorkspaceStateRead(params: {
   setupCompletedAt?: string;
   errorCode?: string;
