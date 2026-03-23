@@ -1459,7 +1459,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "object",
                   properties: {
                     alias: {
-                      type: "string",
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      ],
                     },
                     params: {
                       type: "object",
@@ -1477,6 +1487,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               workspace: {
                 type: "string",
+              },
+              workspaceConfig: {
+                type: "object",
+                properties: {
+                  allowedExternalPaths: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
               },
               repoRoot: {
                 type: "string",
@@ -3386,6 +3408,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 agentDir: {
                   type: "string",
+                },
+                workspaceConfig: {
+                  type: "object",
+                  properties: {
+                    allowedExternalPaths: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                  },
+                  additionalProperties: false,
                 },
                 model: {
                   anyOf: [
@@ -16232,22 +16266,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "channels.irc.accounts.*.nickserv.password": {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.googlechat.serviceAccount": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.serviceAccountRef": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.accounts.*.serviceAccount": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.accounts.*.serviceAccountRef": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
     },
     "channels.slack.signingSecret": {
       sensitive: true,

@@ -2317,6 +2317,30 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "openai-codex-import-auth",
+    idHint: "openai-codex-import-auth",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/openai-codex-import-auth",
+    packageVersion: "2026.2.16",
+    packageDescription:
+      "OpenAI Codex CLI auth provider plugin - use ChatGPT Plus/Pro subscription for OpenAI models",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "openai-codex-import-auth",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["openai-codex-import"],
+    },
+  },
+  {
     dirName: "opencode",
     idHint: "opencode",
     source: {
@@ -3641,6 +3665,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           responseTimeoutMs: {
             type: "integer",
             minimum: 1,
+          },
+          responseAgentId: {
+            type: "string",
           },
         },
       },
