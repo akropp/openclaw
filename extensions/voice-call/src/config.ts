@@ -411,6 +411,9 @@ export const VoiceCallConfigSchema = z
     /** Optional model override for generating voice responses. */
     responseModel: z.string().optional(),
 
+    /** Agent ID for voice response sessions (e.g. "clawdio"). Falls back to "main". */
+    responseAgentId: z.string().optional(),
+
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 
